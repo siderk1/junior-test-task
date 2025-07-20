@@ -10,7 +10,7 @@
   "scripts": {
     "generate": "prisma generate --schema=schema.prisma",
     "migrate": "prisma migrate deploy --schema=schema.prisma",
-    "build": "tsc -b"
+    "build": "prisma generate --schema=schema.prisma && tsc -b"
   },
   "keywords": [],
   "author": "",

@@ -10,8 +10,6 @@ COPY apps/reporter ./apps/reporter
 
 RUN npm install -g pnpm && pnpm install
 
-RUN pnpm --filter @repo/prisma generate
-
 RUN pnpm build
 
 COPY .env ./packages/prisma/.env
