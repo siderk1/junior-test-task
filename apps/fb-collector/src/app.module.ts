@@ -20,7 +20,6 @@ import { LoggerModule } from '@repo/logger';
     FbCollectorModule,
     LoggerModule
   ],
-  providers: [FbCollectorService],
   controllers: [AppController]
 })
 export class AppModule {}
