@@ -15,17 +15,26 @@ export class ReporterController {
   constructor(private readonly reporterService: ReporterService) {}
 
   @Get('events')
-  async getEvents(@Query(new ZodValidationPipe(EventsReportQuerySchema)) query: EventsReportQuery) {
+  async getEvents(
+    @Query(new ZodValidationPipe(EventsReportQuerySchema))
+    query: EventsReportQuery
+  ) {
     return this.reporterService.getEventsReport(query);
   }
 
   @Get('revenue')
-  async getRevenue(@Query(new ZodValidationPipe(RevenueReportQuerySchema)) query: RevenueReportQuery) {
+  async getRevenue(
+    @Query(new ZodValidationPipe(RevenueReportQuerySchema))
+    query: RevenueReportQuery
+  ) {
     return this.reporterService.getRevenueReport(query);
   }
 
   @Get('demographics')
-  async getDemographics(@Query(new ZodValidationPipe(DemographicsReportQuerySchema)) query: DemographicsReportQuery) {
+  async getDemographics(
+    @Query(new ZodValidationPipe(DemographicsReportQuerySchema))
+    query: DemographicsReportQuery
+  ) {
     return this.reporterService.getDemographicsReport(query);
   }
 }

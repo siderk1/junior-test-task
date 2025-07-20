@@ -75,10 +75,10 @@ export class ReporterService {
     try {
       const { from, to, source, campaignId } = filters;
 
-      let fbWhere: any = {
+      const fbWhere: any = {
         eventType: 'checkout.complete'
       };
-      let tkWhere: any = {
+      const tkWhere: any = {
         eventType: 'purchase'
       };
 

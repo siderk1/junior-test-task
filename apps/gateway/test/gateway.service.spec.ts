@@ -6,16 +6,16 @@ import { LoggerService } from '@repo/logger';
 
 const mockNatsService = {
   ensureStream: jest.fn(),
-  publish: jest.fn(),
+  publish: jest.fn()
 };
 const mockMetricsService = {
   incAccepted: jest.fn(),
   incProcessed: jest.fn(),
-  incFailed: jest.fn(),
+  incFailed: jest.fn()
 };
 const mockLoggerService = {
   info: jest.fn(),
-  error: jest.fn(),
+  error: jest.fn()
 };
 
 describe('GatewayService', () => {
@@ -27,8 +27,8 @@ describe('GatewayService', () => {
         GatewayService,
         { provide: NatsService, useValue: mockNatsService },
         { provide: MetricsService, useValue: mockMetricsService },
-        { provide: LoggerService, useValue: mockLoggerService },
-      ],
+        { provide: LoggerService, useValue: mockLoggerService }
+      ]
     }).compile();
 
     service = module.get<GatewayService>(GatewayService);
@@ -48,7 +48,7 @@ describe('GatewayService', () => {
 
       expect(mockNatsService.ensureStream).toHaveBeenCalledWith({
         name: 'EVENTS',
-        subjects: ['events.*'],
+        subjects: ['events.*']
       });
       expect(mockLoggerService.error).not.toHaveBeenCalled();
     });
@@ -59,8 +59,8 @@ describe('GatewayService', () => {
       await service.onModuleInit();
 
       expect(mockLoggerService.error).toHaveBeenCalledWith(
-          'GATEWAY Can not ensure EVENTS stream',
-          expect.any(Error)
+        'GATEWAY Can not ensure EVENTS stream',
+        expect.any(Error)
       );
     });
   });
@@ -71,15 +71,23 @@ describe('GatewayService', () => {
 
       const events = [
         { source: 'facebook', eventId: 'e1' },
-        { source: 'tiktok', eventId: 'e2' },
+        { source: 'tiktok', eventId: 'e2' }
       ];
 
       await service.publishEvents(events as any, 'corr-123');
 
       expect(mockMetricsService.incAccepted).toHaveBeenCalledWith(2);
       expect(mockNatsService.publish).toHaveBeenCalledTimes(2);
-      expect(mockNatsService.publish).toHaveBeenCalledWith('events.facebook', events[0], 'corr-123');
-      expect(mockNatsService.publish).toHaveBeenCalledWith('events.tiktok', events[1], 'corr-123');
+      expect(mockNatsService.publish).toHaveBeenCalledWith(
+        'events.facebook',
+        events[0],
+        'corr-123'
+      );
+      expect(mockNatsService.publish).toHaveBeenCalledWith(
+        'events.tiktok',
+        events[1],
+        'corr-123'
+      );
       expect(mockMetricsService.incProcessed).toHaveBeenCalledTimes(2);
       expect(mockMetricsService.incFailed).not.toHaveBeenCalled();
       expect(mockLoggerService.error).not.toHaveBeenCalled();
@@ -90,7 +98,7 @@ describe('GatewayService', () => {
 
       const events = [
         { source: 'facebook', eventId: 'e1' },
-        { source: 'unknown', eventId: 'e2' },
+        { source: 'unknown', eventId: 'e2' }
       ];
 
       await service.publishEvents(events as any, 'corr-xxx');
@@ -107,7 +115,7 @@ describe('GatewayService', () => {
 
       const events = [
         { source: 'facebook', eventId: 'a' },
-        { source: 'tiktok', eventId: 'b' },
+        { source: 'tiktok', eventId: 'b' }
       ];
 
       await service.publishEvents(events as any, 'corr-qwe');
@@ -115,12 +123,12 @@ describe('GatewayService', () => {
       expect(mockMetricsService.incProcessed).toHaveBeenCalledTimes(1);
       expect(mockMetricsService.incFailed).toHaveBeenCalledWith(1);
       expect(mockLoggerService.error).toHaveBeenCalledWith(
-          'GATEWAY Failed to publish event',
-          expect.any(Error),
-          expect.objectContaining({
-            eventId: 'b',
-            correlationId: 'corr-qwe',
-          }),
+        'GATEWAY Failed to publish event',
+        expect.any(Error),
+        expect.objectContaining({
+          eventId: 'b',
+          correlationId: 'corr-qwe'
+        })
       );
     });
   });
