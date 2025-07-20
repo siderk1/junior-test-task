@@ -1,0 +1,165 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum FunnelStage {
+  top
+  bottom
+}
+
+enum Gender {
+  male
+  female
+  non_binary
+}
+
+enum FacebookReferrer {
+  newsfeed
+  marketplace
+  groups
+}
+
+enum ClickPosition {
+  top_left
+  bottom_right
+  center
+}
+
+enum Device {
+  mobile
+  desktop
+}
+
+enum Browser {
+  Chrome
+  Firefox
+  Safari
+}
+
+enum TiktokDevice {
+  Android
+  iOS
+  Desktop
+}
+
+model FacebookUserLocation {
+  id      String @id @default(uuid())
+  country String
+  city    String
+
+  users FacebookUser[]
+
+  @@unique([country, city])
+}
+
+model FacebookUser {
+  id         String               @id @default(uuid())
+  userId     String               @unique
+  name       String
+  age        Int
+  gender     Gender
+  locationId String
+  location   FacebookUserLocation @relation(fields: [locationId], references: [id])
+
+  events FacebookEvent[]
+}
+
+model FacebookEngagementTop {
+  id         String           @id @default(uuid())
+  actionTime DateTime
+  referrer   FacebookReferrer
+  videoId    String?
+
+  events FacebookEvent[] @relation("FbEventTop")
+}
+
+model FacebookEngagementBottom {
+  id             String        @id @default(uuid())
+  adId           String
+  campaignId     String
+  clickPosition  ClickPosition
+  device         Device
+  browser        Browser
+  purchaseAmount Decimal?
+
+  events FacebookEvent[] @relation("FbEventBottom")
+}
+
+model FacebookEvent {
+  id          String       @id @default(uuid())
+  eventId     String       @unique
+  timestamp   DateTime
+  funnelStage FunnelStage
+  eventType   String
+  userId      String
+  user        FacebookUser @relation(fields: [userId], references: [id])
+
+  engagementTopId    String?
+  engagementTop      FacebookEngagementTop?    @relation("FbEventTop", fields: [engagementTopId], references: [id])
+  engagementBottomId String?
+  engagementBottom   FacebookEngagementBottom? @relation("FbEventBottom", fields: [engagementBottomId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([timestamp])
+  @@index([eventType])
+  @@index([funnelStage])
+}
+
+model TiktokUser {
+  id        String @id @default(uuid())
+  userId    String @unique
+  username  String
+  followers Int
+
+  events TiktokEvent[]
+}
+
+model TiktokEngagementTop {
+  id                String       @id @default(uuid())
+  watchTime         Int
+  percentageWatched Int
+  device            TiktokDevice
+  country           String
+  videoId           String
+
+  events TiktokEvent[] @relation("TtkEventTop")
+}
+
+model TiktokEngagementBottom {
+  id             String   @id @default(uuid())
+  actionTime     DateTime
+  profileId      String?
+  purchasedItem  String?
+  purchaseAmount Decimal?
+
+  events TiktokEvent[] @relation("TtkEventBottom")
+}
+
+model TiktokEvent {
+  id          String      @id @default(uuid())
+  eventId     String      @unique
+  timestamp   DateTime
+  funnelStage FunnelStage
+  eventType   String
+  userId      String
+  user        TiktokUser  @relation(fields: [userId], references: [id])
+
+  engagementTopId    String?
+  engagementTop      TiktokEngagementTop?    @relation("TtkEventTop", fields: [engagementTopId], references: [id])
+  engagementBottomId String?
+  engagementBottom   TiktokEngagementBottom? @relation("TtkEventBottom", fields: [engagementBottomId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([timestamp])
+  @@index([eventType])
+  @@index([funnelStage])
+}

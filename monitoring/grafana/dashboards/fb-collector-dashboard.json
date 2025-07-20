@@ -1,0 +1,65 @@
+{
+  "id": null,
+  "title": "FB Collector",
+  "tags": ["collector", "facebook"],
+  "timezone": "browser",
+  "schemaVersion": 37,
+  "version": 1,
+  "refresh": "5s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Accepted Events",
+      "targets": [
+        {
+          "expr": "fb_collector_events_accepted_total",
+          "format": "time_series"
+        }
+      ],
+      "datasource": "Prometheus",
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Processed Events",
+      "targets": [
+        {
+          "expr": "fb_collector_events_processed_total",
+          "format": "time_series"
+        }
+      ],
+      "datasource": "Prometheus",
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "Failed Events",
+      "targets": [
+        {
+          "expr": "fb_collector_events_failed_total",
+          "format": "time_series"
+        }
+      ],
+      "datasource": "Prometheus",
+      "id": 3
+    },
+    {
+      "type": "timeseries",
+      "title": "Events Rate per Minute",
+      "targets": [
+        {
+          "expr": "rate(fb_collector_events_processed_total[1m]) * 60",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "events/min"
+        }
+      },
+      "datasource": "Prometheus",
+      "id": 4
+    }
+
+  ]
+}

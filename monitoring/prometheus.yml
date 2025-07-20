@@ -1,0 +1,23 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'gateway'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['gateway:3001']
+
+  - job_name: 'fb-collector'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['fb-collector:3002']
+
+  - job_name: 'ttk-collector'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['ttk-collector:3003']
+
+  - job_name: 'reporter'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['reporter:3004']

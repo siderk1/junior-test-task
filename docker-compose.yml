@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  publisher:
+    image: andriiuni/events
+    environment:
+      EVENT_ENDPOINT:  ${EVENT_ENDPOINT}
+    depends_on:
+      - gateway
+
+  nats:
+    image: nats:2.10.9
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: ["-js", "--http_port=8222"]
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  migrate:
+    build:
+      context: .
+      dockerfile: packages/prisma/Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+
+  gateway:
+    build:
+      context: .
+      dockerfile: apps/gateway/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "3001:3001"
+    depends_on:
+      - nats
+
+  fb-collector:
+    build:
+      context: .
+      dockerfile: apps/fb-collector/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "3002:3002"
+    depends_on:
+      - nats
+      - postgres
+      - migrate
+      - gateway
+
+  ttk-collector:
+    build:
+      context: .
+      dockerfile: apps/ttk-collector/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "3003:3003"
+    depends_on:
+      - nats
+      - postgres
+      - migrate
+      - gateway
+
+  reporter:
+    build:
+      context: .
+      dockerfile: apps/reporter/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "3004:3004"
+    depends_on:
+      - postgres
+      - migrate
+      - gateway
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3005:3000"
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./monitoring/grafana/provisioning/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml
+      - ./monitoring/grafana/provisioning/datasource.yaml:/etc/grafana/provisioning/datasources/datasource.yaml
+
+  loki:
+    image: grafana/loki:3.4.1
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  loki-data:
+  grafana-data:

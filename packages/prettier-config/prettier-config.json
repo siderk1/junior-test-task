@@ -1,0 +1,20 @@
+{
+    "singleQuote": true,
+    "trailingComma": "none",
+    "bracketSpacing": true,
+    "arrowParens": "always",
+    "overrides": [
+        {
+            "files": "*.yml",
+            "options": {
+                "singleQuote": false
+            }
+        },
+        {
+            "files": "*.yaml",
+            "options": {
+                "singleQuote": false
+            }
+        }
+    ]
+}

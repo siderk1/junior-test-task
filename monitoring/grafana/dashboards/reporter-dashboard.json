@@ -1,0 +1,23 @@
+{
+  "id": null,
+  "title": "Reporter Latency",
+  "tags": ["reporter"],
+  "timezone": "browser",
+  "schemaVersion": 37,
+  "version": 1,
+  "refresh": "5s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Reporter Latency by Category",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(reporter_latency_seconds_bucket[1m])) by (le, category))",
+          "format": "time_series"
+        }
+      ],
+      "datasource": "Prometheus",
+      "id": 1
+    }
+  ]
+}
