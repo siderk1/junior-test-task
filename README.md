@@ -32,7 +32,7 @@ docker compose up -d --build
 
 Each microservice contains its own tests (usually in the `test/` folder under the service directory). To run tests for a specific service:
 
-pnpm --filter @repo/<service-name> test
+pnpm --filter @repo/service-name test
 
 ## Notes
 
