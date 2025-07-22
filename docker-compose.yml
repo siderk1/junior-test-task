@@ -9,7 +9,7 @@ services:
       - gateway
 
   nats:
-    image: nats:2.10.16-alpine3.19
+    image: nats@sha256:c82559e4476289481a8a5196e675ebfe67eea81d95e5161e3e78eccfe766608e
     ports:
       - "4222:4222"
       - "8222:8222"
@@ -21,7 +21,7 @@ services:
       retries: 10
 
   postgres:
-    image: postgres:15
+    image: postgres@sha256:3156e13d976072c9083fe4c56455b8515dcf6fee23fd770e6ba4a3c6b8837337
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -116,14 +116,14 @@ services:
         condition: service_healthy
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana@sha256:b5b59bfc7561634c2d7b136c4543d702ebcc94a3da477f21ff26f89ffd4214fa
     ports:
       - "3005:3000"
     depends_on:
@@ -137,7 +137,7 @@ services:
       - ./monitoring/grafana/provisioning/datasource.yaml:/etc/grafana/provisioning/datasources/datasource.yaml
 
   loki:
-    image: grafana/loki:3.4.1
+    image: grafana/loki@sha256:1d0c5ddc7644b88956aa0bd775ad796d9635180258a225d6ab3552751d5e2a66
     ports:
       - "3100:3100"
     command: -config.file=/etc/loki/local-config.yaml
