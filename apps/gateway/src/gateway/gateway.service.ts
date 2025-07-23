@@ -7,7 +7,8 @@ import { LoggerService } from '@repo/logger';
 
 @Injectable()
 export class GatewayService implements OnModuleInit {
-  private readonly BATCH_SIZE = 1000;
+  private readonly BATCH_SIZE = 100;
+  private readonly DELAY_BETWEEN_BATCHES_MS = 1000;
 
   constructor(
     private readonly nats: NatsService,
@@ -18,11 +19,15 @@ export class GatewayService implements OnModuleInit {
   async onModuleInit() {
     try {
       await this.nats.ensureStream({
-        name: 'EVENTS',
-        subjects: ['events.*']
+        name: 'EVENTS_FB',
+        subjects: ['events.facebook']
+      });
+      await this.nats.ensureStream({
+        name: 'EVENTS_TTK',
+        subjects: ['events.tiktok']
       });
     } catch (error) {
-      this.logger.error('GATEWAY Can not ensure EVENTS stream', error);
+      this.logger.error('GATEWAY Can not ensure EVENTS streams', error);
     }
   }
 
@@ -68,6 +73,11 @@ export class GatewayService implements OnModuleInit {
           }
         })
       );
+      if (i + this.BATCH_SIZE < events.length) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, this.DELAY_BETWEEN_BATCHES_MS)
+        );
+      }
     }
   }
 }

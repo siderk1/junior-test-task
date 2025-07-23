@@ -4,20 +4,39 @@ import { NatsService } from '@repo/nats-wrapper';
 import { PrismaService } from '@repo/prisma';
 import { MetricsService } from '../src/metrics/metrics.service';
 import { LoggerService } from '@repo/logger';
+import { TiktokEvent } from '@repo/shared';
 
-const mockNatsService = { subscribe: jest.fn() };
-const mockPrismaService = {
-  tiktokUser: { upsert: jest.fn() },
-  tiktokEngagementTop: { create: jest.fn() },
-  tiktokEngagementBottom: { create: jest.fn() },
-  tiktokEvent: { create: jest.fn() }
+jest.useFakeTimers();
+
+const mockNatsService = {
+  subscribe: jest.fn()
 };
+
+const mockPrismaService = {
+  $transaction: jest.fn(),
+  tiktokUser: {
+    upsert: jest.fn()
+  },
+  tiktokEngagementTop: {
+    createMany: jest.fn(),
+    findMany: jest.fn()
+  },
+  tiktokEngagementBottom: {
+    createMany: jest.fn(),
+    findMany: jest.fn()
+  },
+  tiktokEvent: {
+    createMany: jest.fn()
+  }
+};
+
 const mockMetricsService = {
   incAccepted: jest.fn(),
   incProcessed: jest.fn(),
   incFailed: jest.fn()
 };
-const mockLoggerService = {
+
+const mockLogger = {
   info: jest.fn(),
   error: jest.fn()
 };
@@ -32,11 +51,12 @@ describe('TtkCollectorService', () => {
         { provide: NatsService, useValue: mockNatsService },
         { provide: PrismaService, useValue: mockPrismaService },
         { provide: MetricsService, useValue: mockMetricsService },
-        { provide: LoggerService, useValue: mockLoggerService }
+        { provide: LoggerService, useValue: mockLogger }
       ]
     }).compile();
 
     service = module.get<TtkCollectorService>(TtkCollectorService);
+
     jest.clearAllMocks();
   });
 
@@ -44,80 +64,111 @@ describe('TtkCollectorService', () => {
     expect(service).toBeDefined();
   });
 
-  describe('handleEvent', () => {
-    it('should upsert user, create engagementTop and event (top funnel)', async () => {
-      const fakeEvent: any = {
-        eventId: 'evt1',
-        timestamp: Date.now().toString(),
-        funnelStage: 'top',
-        eventType: 'view',
-        data: {
-          user: {
-            userId: 'user1',
-            username: 'nick',
-            followers: 100
-          },
-          engagement: {
-            watchTime: 100,
-            percentageWatched: 50,
-            device: 'android',
-            country: 'US',
-            videoId: 'vid1'
-          }
+  it('should subscribe on init and start timer', async () => {
+    await service.onModuleInit();
+    expect(mockNatsService.subscribe).toHaveBeenCalled();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      expect.stringContaining('TTK Collector: NATS subscription initialized')
+    );
+  });
+
+  it('should clear interval on destroy', () => {
+    jest.spyOn(global, 'clearInterval');
+    service['batchTimer'] = setInterval(() => {}, 2000);
+    service.onModuleDestroy();
+    expect(clearInterval).toHaveBeenCalled();
+  });
+
+  it('should enqueue event and flush if batch size met', async () => {
+    const flushSpy = jest
+      .spyOn(service as any, 'flushBatch')
+      .mockImplementation(() => Promise.resolve());
+    for (let i = 0; i < 2000; i++) {
+      service['enqueueEvent']({} as any, { ack: jest.fn() }, 'cid');
+    }
+    expect(mockMetricsService.incAccepted).toHaveBeenCalledTimes(2000);
+    expect(flushSpy).toHaveBeenCalled();
+  });
+
+  it('should process a valid batch', async () => {
+    const ack = jest.fn();
+    const mockEvent: TiktokEvent = {
+      eventId: 'event1',
+      timestamp: new Date().toISOString(),
+      funnelStage: 'top',
+      eventType: 'video.view',
+      source: 'tiktok',
+      data: {
+        user: {
+          userId: 'u1',
+          username: 'john',
+          followers: 100
+        },
+        engagement: {
+          watchTime: 123,
+          percentageWatched: 90,
+          device: 'Android',
+          country: 'US',
+          videoId: 'vid1'
         }
-      };
+      }
+    };
 
-      mockPrismaService.tiktokUser.upsert.mockResolvedValue({ id: 1 });
-      mockPrismaService.tiktokEngagementTop.create.mockResolvedValue({ id: 2 });
-      mockPrismaService.tiktokEvent.create.mockResolvedValue({});
+    service['eventQueue'] = [
+      { event: mockEvent, msg: { ack }, correlationId: 'cid1' }
+    ];
 
-      await service.handleEvent(fakeEvent);
+    mockPrismaService.$transaction.mockImplementation((fn) =>
+      fn(mockPrismaService)
+    );
+    mockPrismaService.tiktokUser.upsert.mockResolvedValue({ id: 'db1' });
+    mockPrismaService.tiktokEngagementTop.createMany.mockResolvedValue({});
+    mockPrismaService.tiktokEngagementTop.findMany.mockResolvedValue([
+      { id: 'top1' }
+    ]);
+    mockPrismaService.tiktokEngagementBottom.createMany.mockResolvedValue({});
+    mockPrismaService.tiktokEngagementBottom.findMany.mockResolvedValue([]);
+    mockPrismaService.tiktokEvent.createMany.mockResolvedValue({});
 
-      expect(mockPrismaService.tiktokUser.upsert).toHaveBeenCalled();
-      expect(mockPrismaService.tiktokEngagementTop.create).toHaveBeenCalled();
-      expect(
-        mockPrismaService.tiktokEngagementBottom.create
-      ).not.toHaveBeenCalled();
-      expect(mockPrismaService.tiktokEvent.create).toHaveBeenCalled();
-    });
+    await (service as any).flushBatch();
 
-    it('should upsert user, create engagementBottom and event (bottom funnel)', async () => {
-      const fakeEvent: any = {
-        eventId: 'evt2',
-        timestamp: Date.now().toString(),
-        funnelStage: 'bottom',
-        eventType: 'purchase',
-        data: {
-          user: {
-            userId: 'user2',
-            username: 'olga',
-            followers: 250
-          },
-          engagement: {
-            actionTime: Date.now(),
-            profileId: 'p1',
-            purchasedItem: 't-shirt',
-            purchaseAmount: '200'
-          }
+    expect(mockMetricsService.incProcessed).toHaveBeenCalledWith(1);
+    expect(ack).toHaveBeenCalled();
+    expect(mockPrismaService.tiktokUser.upsert).toHaveBeenCalled();
+    expect(mockPrismaService.tiktokEvent.createMany).toHaveBeenCalled();
+  });
+
+  it('should catch error in flushBatch and increase failure metric', async () => {
+    const ack = jest.fn();
+    const event = {
+      eventId: 'event1',
+      timestamp: new Date().toISOString(),
+      funnelStage: 'top',
+      eventType: 'video.view',
+      source: 'tiktok',
+      data: {
+        user: { userId: 'u1', username: 'jane', followers: 100 },
+        engagement: {
+          watchTime: 123,
+          percentageWatched: 90,
+          device: 'Android',
+          country: 'US',
+          videoId: 'vid1'
         }
-      };
+      }
+    } as TiktokEvent;
 
-      mockPrismaService.tiktokUser.upsert.mockResolvedValue({ id: 10 });
-      mockPrismaService.tiktokEngagementBottom.create.mockResolvedValue({
-        id: 20
-      });
-      mockPrismaService.tiktokEvent.create.mockResolvedValue({});
+    service['eventQueue'] = [{ event, msg: { ack }, correlationId: 'cid' }];
+    jest
+      .spyOn(service as any, 'handleBatch')
+      .mockRejectedValue(new Error('fail'));
 
-      await service.handleEvent(fakeEvent);
+    await (service as any).flushBatch();
 
-      expect(mockPrismaService.tiktokUser.upsert).toHaveBeenCalled();
-      expect(
-        mockPrismaService.tiktokEngagementBottom.create
-      ).toHaveBeenCalled();
-      expect(
-        mockPrismaService.tiktokEngagementTop.create
-      ).not.toHaveBeenCalled();
-      expect(mockPrismaService.tiktokEvent.create).toHaveBeenCalled();
-    });
+    expect(mockMetricsService.incFailed).toHaveBeenCalledWith(1);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      'Failed to process batch',
+      expect.any(Error)
+    );
   });
 });

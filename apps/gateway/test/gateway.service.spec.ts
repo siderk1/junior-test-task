@@ -3,6 +3,11 @@ import { GatewayService } from '../src/gateway/gateway.service';
 import { NatsService } from '@repo/nats-wrapper';
 import { MetricsService } from '../src/metrics/metrics.service';
 import { LoggerService } from '@repo/logger';
+import { randomUUID } from 'crypto';
+
+jest.mock('crypto', () => ({
+  randomUUID: jest.fn(() => 'mock-uuid'),
+}));
 
 const mockNatsService = {
   ensureStream: jest.fn(),
@@ -34,6 +39,13 @@ describe('GatewayService', () => {
     service = module.get<GatewayService>(GatewayService);
 
     jest.clearAllMocks();
+
+    (service as any).DELAY_BETWEEN_BATCHES_MS = 0;
+
+    jest.spyOn(global, 'setTimeout').mockImplementation((fn: any) => {
+      fn();
+      return null as any;
+    });
   });
 
   it('should be defined', () => {
@@ -41,26 +53,32 @@ describe('GatewayService', () => {
   });
 
   describe('onModuleInit', () => {
-    it('should call ensureStream', async () => {
+    it('should call ensureStream twice with correct args', async () => {
       mockNatsService.ensureStream.mockResolvedValue(undefined);
 
       await service.onModuleInit();
 
+      expect(mockNatsService.ensureStream).toHaveBeenCalledTimes(2);
       expect(mockNatsService.ensureStream).toHaveBeenCalledWith({
-        name: 'EVENTS',
-        subjects: ['events.*']
+        name: 'EVENTS_FB',
+        subjects: ['events.facebook']
+      });
+      expect(mockNatsService.ensureStream).toHaveBeenCalledWith({
+        name: 'EVENTS_TTK',
+        subjects: ['events.tiktok']
       });
       expect(mockLoggerService.error).not.toHaveBeenCalled();
     });
 
     it('should log error if ensureStream throws', async () => {
-      mockNatsService.ensureStream.mockRejectedValue(new Error('fail!'));
+      const error = new Error('fail!');
+      mockNatsService.ensureStream.mockRejectedValue(error);
 
       await service.onModuleInit();
 
       expect(mockLoggerService.error).toHaveBeenCalledWith(
-        'GATEWAY Can not ensure EVENTS stream',
-        expect.any(Error)
+          'GATEWAY Can not ensure EVENTS streams',
+          error
       );
     });
   });
@@ -79,14 +97,14 @@ describe('GatewayService', () => {
       expect(mockMetricsService.incAccepted).toHaveBeenCalledWith(2);
       expect(mockNatsService.publish).toHaveBeenCalledTimes(2);
       expect(mockNatsService.publish).toHaveBeenCalledWith(
-        'events.facebook',
-        events[0],
-        'corr-123'
+          'events.facebook',
+          events[0],
+          'corr-123'
       );
       expect(mockNatsService.publish).toHaveBeenCalledWith(
-        'events.tiktok',
-        events[1],
-        'corr-123'
+          'events.tiktok',
+          events[1],
+          'corr-123'
       );
       expect(mockMetricsService.incProcessed).toHaveBeenCalledTimes(2);
       expect(mockMetricsService.incFailed).not.toHaveBeenCalled();
@@ -107,9 +125,9 @@ describe('GatewayService', () => {
       expect(mockMetricsService.incFailed).toHaveBeenCalledWith(1);
     });
 
-    it('should log error if publish throws', async () => {
-      mockNatsService.publish.mockImplementation((subj) => {
-        if (subj === 'events.facebook') return Promise.resolve();
+    it('should log error if publish throws and continue processing other events', async () => {
+      mockNatsService.publish.mockImplementation((subject) => {
+        if (subject === 'events.facebook') return Promise.resolve();
         throw new Error('fail-publish');
       });
 
@@ -123,13 +141,44 @@ describe('GatewayService', () => {
       expect(mockMetricsService.incProcessed).toHaveBeenCalledTimes(1);
       expect(mockMetricsService.incFailed).toHaveBeenCalledWith(1);
       expect(mockLoggerService.error).toHaveBeenCalledWith(
-        'GATEWAY Failed to publish event',
-        expect.any(Error),
-        expect.objectContaining({
-          eventId: 'b',
-          correlationId: 'corr-qwe'
-        })
+          'GATEWAY Failed to publish event',
+          expect.any(Error),
+          expect.objectContaining({
+            eventId: 'b',
+            correlationId: 'corr-qwe'
+          })
       );
+    });
+
+    it('should generate correlationId if not provided', async () => {
+      mockNatsService.publish.mockResolvedValue(undefined);
+
+      const events = [
+        { source: 'facebook', eventId: 'x' }
+      ];
+
+      await service.publishEvents(events as any);
+
+      expect(randomUUID).toHaveBeenCalled();
+      expect(mockNatsService.publish).toHaveBeenCalledWith(
+          'events.facebook',
+          events[0],
+          'mock-uuid'
+      );
+    });
+
+    it('should batch publish all events without real delay', async () => {
+      mockNatsService.publish.mockResolvedValue(undefined);
+
+      const events = Array.from({ length: 250 }, (_, i) => ({
+        source: i % 2 === 0 ? 'facebook' : 'tiktok',
+        eventId: `e${i}`
+      }));
+
+      await service.publishEvents(events as any, 'corr-123');
+
+      expect(mockNatsService.publish).toHaveBeenCalledTimes(250);
+      expect(mockMetricsService.incAccepted).toHaveBeenCalledWith(250);
     });
   });
 });
