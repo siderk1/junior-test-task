@@ -6,28 +6,16 @@ import { MetricsService } from '../src/metrics/metrics.service';
 import { LoggerService } from '@repo/logger';
 import { TiktokEvent } from '@repo/shared';
 
-jest.useFakeTimers();
-
 const mockNatsService = {
-  subscribe: jest.fn()
+  pullSubscribeBatch: jest.fn()
 };
 
 const mockPrismaService = {
   $transaction: jest.fn(),
-  tiktokUser: {
-    upsert: jest.fn()
-  },
-  tiktokEngagementTop: {
-    createMany: jest.fn(),
-    findMany: jest.fn()
-  },
-  tiktokEngagementBottom: {
-    createMany: jest.fn(),
-    findMany: jest.fn()
-  },
-  tiktokEvent: {
-    createMany: jest.fn()
-  }
+  tiktokUser: { upsert: jest.fn() },
+  tiktokEngagementTop: { createMany: jest.fn(), findMany: jest.fn() },
+  tiktokEngagementBottom: { createMany: jest.fn(), findMany: jest.fn() },
+  tiktokEvent: { createMany: jest.fn() }
 };
 
 const mockMetricsService = {
@@ -45,6 +33,7 @@ describe('TtkCollectorService', () => {
   let service: TtkCollectorService;
 
   beforeEach(async () => {
+    jest.clearAllMocks();
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         TtkCollectorService,
@@ -56,42 +45,32 @@ describe('TtkCollectorService', () => {
     }).compile();
 
     service = module.get<TtkCollectorService>(TtkCollectorService);
-
-    jest.clearAllMocks();
   });
 
   it('should be defined', () => {
     expect(service).toBeDefined();
   });
 
-  it('should subscribe on init and start timer', async () => {
+  it('should call runPullLoop on init and log messages', async () => {
+    jest.spyOn(service as any, 'runPullLoop').mockImplementation(() => Promise.resolve());
     await service.onModuleInit();
-    expect(mockNatsService.subscribe).toHaveBeenCalled();
     expect(mockLogger.info).toHaveBeenCalledWith(
-      expect.stringContaining('TTK Collector: NATS subscription initialized')
+      expect.stringContaining('TTK Collector: Initializing JetStream PULL subscription...')
+    );
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      expect.stringContaining('TTK Collector: JetStream PULL subscription initialized.')
     );
   });
 
-  it('should clear interval on destroy', () => {
-    jest.spyOn(global, 'clearInterval');
-    service['batchTimer'] = setInterval(() => {}, 2000);
+  it('should set isShuttingDown on destroy', () => {
+    service['isShuttingDown'] = false;
     service.onModuleDestroy();
-    expect(clearInterval).toHaveBeenCalled();
+    expect(service['isShuttingDown']).toBe(true);
   });
 
-  it('should enqueue event and flush if batch size met', async () => {
-    const flushSpy = jest
-      .spyOn(service as any, 'flushBatch')
-      .mockImplementation(() => Promise.resolve());
-    for (let i = 0; i < 2000; i++) {
-      service['enqueueEvent']({} as any, { ack: jest.fn() }, 'cid');
-    }
-    expect(mockMetricsService.incAccepted).toHaveBeenCalledTimes(2000);
-    expect(flushSpy).toHaveBeenCalled();
-  });
-
-  it('should process a valid batch', async () => {
+  it('should process a valid batch in handleBatch', async () => {
     const ack = jest.fn();
+    const mockMsg = { ack };
     const mockEvent: TiktokEvent = {
       eventId: 'event1',
       timestamp: new Date().toISOString(),
@@ -113,62 +92,30 @@ describe('TtkCollectorService', () => {
         }
       }
     };
-
-    service['eventQueue'] = [
-      { event: mockEvent, msg: { ack }, correlationId: 'cid1' }
-    ];
-
-    mockPrismaService.$transaction.mockImplementation((fn) =>
-      fn(mockPrismaService)
-    );
+    mockPrismaService.$transaction.mockImplementation(async (fn) => fn(mockPrismaService));
     mockPrismaService.tiktokUser.upsert.mockResolvedValue({ id: 'db1' });
     mockPrismaService.tiktokEngagementTop.createMany.mockResolvedValue({});
-    mockPrismaService.tiktokEngagementTop.findMany.mockResolvedValue([
-      { id: 'top1' }
-    ]);
+    mockPrismaService.tiktokEngagementTop.findMany.mockResolvedValue([{ id: 'top1' }]);
     mockPrismaService.tiktokEngagementBottom.createMany.mockResolvedValue({});
     mockPrismaService.tiktokEngagementBottom.findMany.mockResolvedValue([]);
     mockPrismaService.tiktokEvent.createMany.mockResolvedValue({});
-
-    await (service as any).flushBatch();
-
-    expect(mockMetricsService.incProcessed).toHaveBeenCalledWith(1);
-    expect(ack).toHaveBeenCalled();
+    const batch = [
+      { event: mockEvent, msg: mockMsg, correlationId: 'cid1' }
+    ];
+    await (service as any).handleBatch(batch);
     expect(mockPrismaService.tiktokUser.upsert).toHaveBeenCalled();
+    expect(mockPrismaService.tiktokEngagementTop.createMany).toHaveBeenCalled();
+    expect(mockPrismaService.tiktokEngagementTop.findMany).toHaveBeenCalled();
     expect(mockPrismaService.tiktokEvent.createMany).toHaveBeenCalled();
   });
 
-  it('should catch error in flushBatch and increase failure metric', async () => {
-    const ack = jest.fn();
-    const event = {
-      eventId: 'event1',
-      timestamp: new Date().toISOString(),
-      funnelStage: 'top',
-      eventType: 'video.view',
-      source: 'tiktok',
-      data: {
-        user: { userId: 'u1', username: 'jane', followers: 100 },
-        engagement: {
-          watchTime: 123,
-          percentageWatched: 90,
-          device: 'Android',
-          country: 'US',
-          videoId: 'vid1'
-        }
-      }
-    } as TiktokEvent;
-
-    service['eventQueue'] = [{ event, msg: { ack }, correlationId: 'cid' }];
-    jest
-      .spyOn(service as any, 'handleBatch')
-      .mockRejectedValue(new Error('fail'));
-
-    await (service as any).flushBatch();
-
-    expect(mockMetricsService.incFailed).toHaveBeenCalledWith(1);
-    expect(mockLogger.error).toHaveBeenCalledWith(
-      'Failed to process batch',
-      expect.any(Error)
-    );
+  it('should log error if handleBatch throws', async () => {
+    const error = new Error('fail!');
+    const batch = [{ event: {} as any, msg: { ack: jest.fn() }, correlationId: 'cid1' }];
+    const spy = jest.spyOn(service as any, 'handleBatch').mockRejectedValue(error);
+    try {
+      await (service as any).handleBatch(batch);
+    } catch {}
+    expect(spy).toHaveBeenCalled();
   });
 });

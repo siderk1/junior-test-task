@@ -12,6 +12,7 @@ import {
   RetentionPolicy,
   StorageType,
   DiscardPolicy,
+  ConsumerOptsBuilder,
 } from "nats";
 
 @Injectable()
@@ -20,6 +21,7 @@ export class NatsService implements OnModuleDestroy {
   private _js: JetStreamClient | null = null;
   private _jsm: JetStreamManager | null = null;
   private readonly jc = JSONCodec();
+  private isShuttingDown = false;
 
   get client(): NatsConnection {
     if (!this._client) throw new Error("NATS not connected");
@@ -44,16 +46,17 @@ export class NatsService implements OnModuleDestroy {
 
   async onModuleDestroy() {
     if (this._client) {
+      this.isShuttingDown = true;
       await this._client.drain();
       await this._client.close();
     }
   }
 
   async publish<T>(
-    subject: string,
-    data: T,
-    correlationId?: string,
-    opts?: JetStreamPublishOptions,
+      subject: string,
+      data: T,
+      correlationId?: string,
+      opts?: JetStreamPublishOptions,
   ) {
     const h = natsHeaders();
     if (correlationId) h.set("x-correlation-id", correlationId);
@@ -64,15 +67,16 @@ export class NatsService implements OnModuleDestroy {
     });
   }
 
+  // Старая push-based подписка для совместимости
   async subscribe<T = any>(
-    stream: string,
-    subject: string,
-    durable: string,
-    handler: (
-      data: T,
-      msg: JsMsg,
-      correlationId?: string,
-    ) => Promise<void> | void,
+      stream: string,
+      subject: string,
+      durable: string,
+      handler: (
+          data: T,
+          msg: JsMsg,
+          correlationId?: string,
+      ) => Promise<void> | void,
   ) {
     try {
       await this.jsm.consumers.info(stream, durable);
@@ -85,7 +89,6 @@ export class NatsService implements OnModuleDestroy {
     }
 
     const jsConsumer = await this.js.consumers.get(stream, durable);
-
     const messages = await jsConsumer.consume();
 
     (async () => {
@@ -101,15 +104,61 @@ export class NatsService implements OnModuleDestroy {
     })().catch(() => {});
   }
 
+  async pullSubscribeBatch<T = any>(
+      stream: string,
+      subject: string,
+      durable: string,
+      batchSize: number,
+      handler: (
+          batch: { data: T; msg: JsMsg; correlationId?: string }[]
+      ) => Promise<void> | void,
+      opts?: { expires?: number }
+  ) {
+    try {
+      await this.jsm.consumers.info(stream, durable);
+    } catch {
+      await this.jsm.consumers.add(stream, {
+        durable_name: durable,
+        ack_policy: AckPolicy.Explicit,
+        filter_subject: subject,
+      });
+    }
+
+    const consumer = await this.js.consumers.get(stream, durable);
+    const expires = opts?.expires ?? 5000;
+
+    while (!this.isShuttingDown) {
+      const messages = await consumer.fetch({ max_messages: batchSize, expires });
+
+      const batch: { data: T; msg: JsMsg; correlationId?: string }[] = [];
+      for await (const msg of messages) {
+        try {
+          const data = this.jc.decode(msg.data) as T;
+          const correlationId = msg.headers?.get("x-correlation-id");
+          batch.push({ data, msg, correlationId });
+        } catch (err) {
+          // TODO logging
+        }
+      }
+      if (batch.length > 0) {
+        try {
+          await handler(batch);
+        } catch (err) {
+          // TODO logging & dont ack
+        }
+      }
+    }
+  }
+
   async ensureStream({
-    name,
-    subjects,
-    retention = RetentionPolicy.Limits,
-    max_msgs = 1_000_000,
-    max_bytes = 1_000_000_000,
-    storage = StorageType.File,
-    discard = DiscardPolicy.Old,
-  }: {
+                       name,
+                       subjects,
+                       retention = RetentionPolicy.Limits,
+                       max_msgs = 1_000_000,
+                       max_bytes = 1_000_000_000,
+                       storage = StorageType.File,
+                       discard = DiscardPolicy.Old,
+                     }: {
     name: string;
     subjects: string[];
     retention?: RetentionPolicy;
