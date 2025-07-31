@@ -6,7 +6,7 @@ import { LoggerService } from '@repo/logger';
 import { randomUUID } from 'crypto';
 
 jest.mock('crypto', () => ({
-  randomUUID: jest.fn(() => 'mock-uuid'),
+  randomUUID: jest.fn(() => 'mock-uuid')
 }));
 
 const mockNatsService = {
@@ -77,8 +77,8 @@ describe('GatewayService', () => {
       await service.onModuleInit();
 
       expect(mockLoggerService.error).toHaveBeenCalledWith(
-          'GATEWAY Can not ensure EVENTS streams',
-          error
+        'GATEWAY Can not ensure EVENTS streams',
+        error
       );
     });
   });
@@ -97,14 +97,14 @@ describe('GatewayService', () => {
       expect(mockMetricsService.incAccepted).toHaveBeenCalledWith(2);
       expect(mockNatsService.publish).toHaveBeenCalledTimes(2);
       expect(mockNatsService.publish).toHaveBeenCalledWith(
-          'events.facebook',
-          events[0],
-          'corr-123'
+        'events.facebook',
+        events[0],
+        'corr-123'
       );
       expect(mockNatsService.publish).toHaveBeenCalledWith(
-          'events.tiktok',
-          events[1],
-          'corr-123'
+        'events.tiktok',
+        events[1],
+        'corr-123'
       );
       expect(mockMetricsService.incProcessed).toHaveBeenCalledTimes(2);
       expect(mockMetricsService.incFailed).not.toHaveBeenCalled();
@@ -141,29 +141,27 @@ describe('GatewayService', () => {
       expect(mockMetricsService.incProcessed).toHaveBeenCalledTimes(1);
       expect(mockMetricsService.incFailed).toHaveBeenCalledWith(1);
       expect(mockLoggerService.error).toHaveBeenCalledWith(
-          'GATEWAY Failed to publish event',
-          expect.any(Error),
-          expect.objectContaining({
-            eventId: 'b',
-            correlationId: 'corr-qwe'
-          })
+        'GATEWAY Failed to publish event',
+        expect.any(Error),
+        expect.objectContaining({
+          eventId: 'b',
+          correlationId: 'corr-qwe'
+        })
       );
     });
 
     it('should generate correlationId if not provided', async () => {
       mockNatsService.publish.mockResolvedValue(undefined);
 
-      const events = [
-        { source: 'facebook', eventId: 'x' }
-      ];
+      const events = [{ source: 'facebook', eventId: 'x' }];
 
       await service.publishEvents(events as any);
 
       expect(randomUUID).toHaveBeenCalled();
       expect(mockNatsService.publish).toHaveBeenCalledWith(
-          'events.facebook',
-          events[0],
-          'mock-uuid'
+        'events.facebook',
+        events[0],
+        'mock-uuid'
       );
     });
 

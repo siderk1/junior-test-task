@@ -1,5 +1,5 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { NatsService } from '@repo/nats-wrapper';
+import { NatsService, JsMsg } from '@repo/nats-wrapper';
 import { PrismaService } from '@repo/prisma';
 import { FacebookEvent } from '@repo/shared';
 import { MetricsService } from '../metrics/metrics.service';
@@ -9,86 +9,68 @@ function toPrismaGender(gender: 'male' | 'female' | 'non-binary') {
   return gender === 'non-binary' ? 'non_binary' : gender;
 }
 
-interface QueuedFacebookEvent {
-  event: FacebookEvent;
-  msg: any;
-  correlationId?: string;
-}
-
-const BATCH_SIZE = 2000;
-const BATCH_INTERVAL_MS = 2000;
+const BATCH_SIZE = 100;
+const FETCH_TIMEOUT_MS = 1000;
 
 @Injectable()
 export class FbCollectorService implements OnModuleInit, OnModuleDestroy {
-  private eventQueue: QueuedFacebookEvent[] = [];
-  private batchTimer: NodeJS.Timeout | null = null;
-  private isFlushing = false;
+  private isShuttingDown = false;
 
   constructor(
-    private readonly nats: NatsService,
-    private readonly prisma: PrismaService,
-    private readonly metrics: MetricsService,
-    private readonly logger: LoggerService
+      private readonly nats: NatsService,
+      private readonly prisma: PrismaService,
+      private readonly metrics: MetricsService,
+      private readonly logger: LoggerService
   ) {}
 
   async onModuleInit() {
-    this.logger.info('FB Collector: Initializing NATS subscription...');
-    await this.nats.subscribe<FacebookEvent>(
-      'EVENTS_FB',
-      'events.facebook',
-      'fb-collector',
-      async (event, msg, correlationId) => {
-        this.enqueueEvent(event, msg, correlationId);
-      }
-    );
-    this.startBatchTimer();
-    this.logger.info(
-      'FB Collector: NATS subscription initialized. Batch processing enabled.'
-    );
+    this.logger.info('FB Collector: Initializing JetStream PULL subscription...');
+    this.runPullLoop();
+    this.logger.info('FB Collector: JetStream PULL subscription initialized.');
   }
 
   onModuleDestroy() {
-    if (this.batchTimer) {
-      clearInterval(this.batchTimer);
-    }
+    this.isShuttingDown = true;
   }
 
-  private enqueueEvent(event: FacebookEvent, msg: any, correlationId?: string) {
-    this.eventQueue.push({ event, msg, correlationId });
-    this.metrics.incAccepted();
-    if (this.eventQueue.length >= BATCH_SIZE) {
-      this.flushBatch();
-    }
-  }
-
-  private startBatchTimer() {
-    this.batchTimer = setInterval(() => {
-      if (this.eventQueue.length > 0) {
-        this.flushBatch();
+  private async runPullLoop() {
+    while (!this.isShuttingDown) {
+      try {
+        await this.nats.pullSubscribeBatch<FacebookEvent>(
+            'EVENTS_FB',
+            'events.facebook',
+            'fb-collector',
+            BATCH_SIZE,
+            async (batch) => {
+              this.metrics.incAccepted(batch.length);
+              try {
+                await this.handleBatch(
+                    batch.map(({ data, msg, correlationId }) => ({
+                      event: data,
+                      msg,
+                      correlationId,
+                    }))
+                );
+                this.metrics.incProcessed(batch.length);
+                batch.forEach(({ msg }) => msg.ack());
+              } catch (error) {
+                this.metrics.incFailed(batch.length);
+                this.logger.error('Failed to process FB batch', error);
+              }
+            },
+            { expires: FETCH_TIMEOUT_MS }
+        );
+      } catch (error) {
+        this.logger.error('NATS PULL fetch error', error);
+        await new Promise(res => setTimeout(res, 1000));
       }
-    }, BATCH_INTERVAL_MS);
-  }
-
-  private async flushBatch() {
-    if (this.isFlushing || this.eventQueue.length === 0) return;
-    this.isFlushing = true;
-    const batch = this.eventQueue.splice(0, BATCH_SIZE);
-    try {
-      await this.handleBatch(batch);
-      this.metrics.incProcessed(batch.length);
-      batch.forEach(({ msg }) => msg.ack());
-    } catch (error) {
-      this.metrics.incFailed(batch.length);
-      this.logger.error('Failed to process batch', error);
-    } finally {
-      this.isFlushing = false;
     }
   }
 
-  private async handleBatch(batch: QueuedFacebookEvent[]) {
+  private async handleBatch(batch: { event: FacebookEvent, msg: JsMsg, correlationId?: string }[]) {
     const locationMap = new Map<
-      string,
-      FacebookEvent['data']['user']['location']
+        string,
+        FacebookEvent['data']['user']['location']
     >();
     for (const { event } of batch) {
       const loc = event.data.user.location;
@@ -99,23 +81,23 @@ export class FbCollectorService implements OnModuleInit, OnModuleDestroy {
       const promises: Promise<unknown>[] = [];
       for (const loc of locationMap.values()) {
         promises.push(
-          tx.facebookUserLocation
-            .upsert({
-              where: {
-                country_city: {
-                  country: loc.country,
-                  city: loc.city
-                }
-              },
-              update: {},
-              create: {
-                country: loc.country,
-                city: loc.city
-              }
-            })
-            .then((dbLoc) => {
-              locationKeyToDbId.set(`${loc.country}__${loc.city}`, dbLoc.id);
-            })
+            tx.facebookUserLocation
+                .upsert({
+                  where: {
+                    country_city: {
+                      country: loc.country,
+                      city: loc.city
+                    }
+                  },
+                  update: {},
+                  create: {
+                    country: loc.country,
+                    city: loc.city
+                  }
+                })
+                .then((dbLoc) => {
+                  locationKeyToDbId.set(`${loc.country}__${loc.city}`, dbLoc.id);
+                })
         );
       }
       await Promise.all(promises);
@@ -130,30 +112,30 @@ export class FbCollectorService implements OnModuleInit, OnModuleDestroy {
       const promises: Promise<unknown>[] = [];
       for (const user of userMap.values()) {
         promises.push(
-          tx.facebookUser
-            .upsert({
-              where: { userId: user.userId },
-              update: {
-                name: user.name,
-                age: user.age,
-                gender: toPrismaGender(user.gender),
-                locationId: locationKeyToDbId.get(
-                  `${user.location.country}__${user.location.city}`
-                )!
-              },
-              create: {
-                userId: user.userId,
-                name: user.name,
-                age: user.age,
-                gender: toPrismaGender(user.gender),
-                locationId: locationKeyToDbId.get(
-                  `${user.location.country}__${user.location.city}`
-                )!
-              }
-            })
-            .then((dbUser) => {
-              userIdToDbId.set(user.userId, dbUser.id);
-            })
+            tx.facebookUser
+                .upsert({
+                  where: { userId: user.userId },
+                  update: {
+                    name: user.name,
+                    age: user.age,
+                    gender: toPrismaGender(user.gender),
+                    locationId: locationKeyToDbId.get(
+                        `${user.location.country}__${user.location.city}`
+                    )!
+                  },
+                  create: {
+                    userId: user.userId,
+                    name: user.name,
+                    age: user.age,
+                    gender: toPrismaGender(user.gender),
+                    locationId: locationKeyToDbId.get(
+                        `${user.location.country}__${user.location.city}`
+                    )!
+                  }
+                })
+                .then((dbUser) => {
+                  userIdToDbId.set(user.userId, dbUser.id);
+                })
         );
       }
       await Promise.all(promises);
@@ -167,8 +149,8 @@ export class FbCollectorService implements OnModuleInit, OnModuleDestroy {
 
     for (const { event } of batch) {
       if (
-        event.funnelStage === 'top' &&
-        'actionTime' in event.data.engagement
+          event.funnelStage === 'top' &&
+          'actionTime' in event.data.engagement
       ) {
         engagementTops.push({
           actionTime: new Date(event.data.engagement.actionTime),
@@ -185,8 +167,8 @@ export class FbCollectorService implements OnModuleInit, OnModuleDestroy {
           device: (event.data.engagement as any).device || null,
           browser: (event.data.engagement as any).browser || null,
           purchaseAmount: (event.data.engagement as any).purchaseAmount
-            ? Number((event.data.engagement as any).purchaseAmount)
-            : null
+              ? Number((event.data.engagement as any).purchaseAmount)
+              : null
         });
         engagementTopRefs.push(null);
         engagementBottomRefs.push(event.eventId);
